@@ -7,7 +7,7 @@ from collections import deque
 from datetime import datetime
 import queue
 import uuid
-
+from pathlib import Path
 import warnings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -264,10 +264,10 @@ def gen_single_core(params):
     emo_random = params['emo_random']
     max_text_tokens_per_segment = params['max_text_tokens_per_segment']
     kwargs = params['kwargs']
-    
     # 生成输出路径
     timestamp = int(time.time() * 1000)
-    output_path = os.path.join("outputs", f"spk_{timestamp}.wav")
+
+    output_path = os.path.join("outputs", f"{Path(prompt).stem}_{text[:20]}_{timestamp}.wav")
     
     if type(emo_control_method) is not int:
         emo_control_method = emo_control_method.value
