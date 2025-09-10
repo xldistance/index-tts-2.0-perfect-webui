@@ -9,7 +9,7 @@ import queue
 import uuid
 from pathlib import Path
 import warnings
-
+import re
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -236,27 +236,28 @@ def process_queue():
                 if output:
                     add_to_history(output)
                     
-            except Exception as e:
+            except Exception as ex:
+                print(f"队列生成音频失败，错误信息：{ex}")
                 # 更新任务状态为失败
                 with queue_lock:
                     if task_id in queue_status:
                         queue_status[task_id]['status'] = TaskStatus.FAILED
-                        queue_status[task_id]['error'] = str(e)
+                        queue_status[task_id]['error'] = str(ex)
                         queue_status[task_id]['end_time'] = datetime.now()
             
             current_task_id = None
             
         except queue.Empty:
             continue
-        except Exception as e:
-            print(f"Queue processing error: {e}")
+        except Exception as ex:
+            print(f"Queue processing error: {ex}")
             current_task_id = None
 
 def gen_single_core(params):
     """核心生成函数（从原gen_single提取）"""
     emo_control_method = params['emo_control_method']
     prompt = params['prompt']
-    text = params['text']
+    text:str = params['text']
     emo_ref_path = params['emo_ref_path']
     emo_weight = params['emo_weight']
     vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8 = params['vec']
@@ -266,8 +267,8 @@ def gen_single_core(params):
     kwargs = params['kwargs']
     # 生成输出路径
     timestamp = int(time.time() * 1000)
-
-    output_path = os.path.join("outputs", f"{Path(prompt).stem}_{text[:20]}_{timestamp}.wav")
+    cleaned_text = re.sub(r'[\n ]', '', text)
+    output_path = os.path.join("outputs", f"{Path(prompt).stem}_{cleaned_text[:20]}_{timestamp}.wav")
     
     if type(emo_control_method) is not int:
         emo_control_method = emo_control_method.value
