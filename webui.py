@@ -300,6 +300,14 @@ def add_to_queue(emo_control_method, prompt, text,
     """添加任务到队列"""
     global processing_thread, stop_processing
     
+    # 验证必要输入
+    if not text or text.strip() == "":
+        return gr.update(value="<div style='color: red;'>❌ 错误：请输入文本内容</div>"), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+    
+    if not prompt:
+        return gr.update(value="<div style='color: red;'>❌ 错误：请选择音色</div>"), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+    
+    # 处理参数
     do_sample, top_p, top_k, temperature, \
         length_penalty, num_beams, repetition_penalty, max_mel_tokens = args
     kwargs = {
@@ -308,28 +316,30 @@ def add_to_queue(emo_control_method, prompt, text,
         "top_k": int(top_k) if int(top_k) > 0 else None,
         "temperature": float(temperature),
         "length_penalty": float(length_penalty),
-        "num_beams": num_beams,
+        "num_beams": int(num_beams),
         "repetition_penalty": float(repetition_penalty),
         "max_mel_tokens": int(max_mel_tokens),
     }
     
+    # 创建任务
     task_id = str(uuid.uuid4())
     task = {
         'id': task_id,
         'params': {
             'emo_control_method': emo_control_method,
             'prompt': prompt,
-            'text': text,
-            'emo_ref_path': emo_ref_path,
-            'emo_weight': emo_weight,
-            'vec': [vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8],
-            'emo_text': emo_text,
-            'emo_random': emo_random,
-            'max_text_tokens_per_segment': max_text_tokens_per_segment,
+            'text': text.strip(),
+            'emo_ref_path': emo_ref_path if emo_ref_path else None,
+            'emo_weight': float(emo_weight) if emo_weight else 0.8,
+            'vec': [float(v) for v in [vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8]],
+            'emo_text': emo_text if emo_text else None,
+            'emo_random': bool(emo_random),
+            'max_text_tokens_per_segment': int(max_text_tokens_per_segment),
             'kwargs': kwargs
         }
     }
     
+    # 添加到队列状态
     with queue_lock:
         queue_status[task_id] = {
             'status': TaskStatus.PENDING,
@@ -338,8 +348,10 @@ def add_to_queue(emo_control_method, prompt, text,
             'position': task_queue.qsize() + 1
         }
     
+    # 添加到队列
     task_queue.put(task)
     
+    # 启动处理线程（如果还没启动）
     if processing_thread is None or not processing_thread.is_alive():
         stop_processing = False
         processing_thread = threading.Thread(target=process_queue, daemon=True)
