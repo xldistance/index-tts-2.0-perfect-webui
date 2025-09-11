@@ -1,4 +1,4 @@
-<img width="3786" height="1748" alt="QQ20250911-151718" src="https://github.com/user-attachments/assets/bfc8a686-cb14-4ee9-bb7d-27c87e965ac1" />
+<img width="3720" height="1774" alt="QQ20250911-151718" src="https://github.com/user-attachments/assets/ae4ec1c7-3d26-486f-9c76-2cf8423a117a" />
 # 📌 升级建议：Gradio 与 Pandas
 
 为确保项目稳定运行并兼容最新功能，**强烈建议**将以下两个关键库升级至最新版本：
@@ -30,12 +30,3 @@ pip install --upgrade pandas
 2. **队列生成音频：**
 
    * 支持音频生成队列的管理。
-   * 可以按队列顺序生成和播放音频。
-
-3. **历史生成音频管理：**
-
-   * 保留**最近6个生成的音频**文件。
-   * 保存历史音频的播放记录，方便断点续播
-   * **自动刷新队列和最新生成音频**，历史记录需要手动刷新，刷新后丢失历史播放位置
-
----
