@@ -420,7 +420,62 @@ def get_queue_status():
         latest_output_update = gr.update(value=latest_output, visible=bool(latest_output)) if latest_output else gr.update()
 
         return (queue_update, table_update, latest_output_update, *history_updates)
+def auto_refresh_queue_and_latest():
+    """仅刷新队列状态和最新生成音频，不刷新历史记录"""
+    # ✅ 修复点：正确接收两个返回值，但只使用音频路径部分
+    audio_paths, _ = get_history_display()  # 我们只关心 latest_output
 
+    latest_output = None
+    with queue_lock:
+        # 从队列状态中查找最新的已完成任务
+        sorted_tasks = sorted(queue_status.items(), key=lambda x: x[1]['submit_time'], reverse=True)
+        for task_id, info in sorted_tasks:
+            if info['status'] == TaskStatus.COMPLETED and 'output' in info:
+                latest_output = info['output']
+                break
+
+    # 构造队列状态 HTML
+    with queue_lock:
+        pending_count = sum(1 for s in queue_status.values() if s['status'] == TaskStatus.PENDING)
+        processing_count = sum(1 for s in queue_status.values() if s['status'] == TaskStatus.PROCESSING)
+        completed_count = sum(1 for s in queue_status.values() if s['status'] == TaskStatus.COMPLETED)
+
+        status_text = f"""
+        <div style='padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
+            <h4 style='margin: 0 0 10px 0;'>📊 队列状态</h4>
+            <div style='display: flex; justify-content: space-around;'>
+                <div>🔄 处理中: <b>{processing_count}</b></div>
+                <div>⏳ 等待中: <b>{pending_count}</b></div>
+                <div>✅ 已完成: <b>{completed_count}</b></div>
+                <div>📁 队列长度: <b>{task_queue.qsize()}</b></div>
+            </div>
+        </div>
+        """
+
+        # 构造队列表格数据
+        data = []
+        sorted_tasks_display = sorted(queue_status.items(), key=lambda x: x[1]['submit_time'])[-10:]
+        for idx, (task_id, info) in enumerate(sorted_tasks_display, 1):
+            status_emoji = {
+                TaskStatus.PENDING: "⏳",
+                TaskStatus.PROCESSING: "🔄",
+                TaskStatus.COMPLETED: "✅",
+                TaskStatus.FAILED: "❌",
+                TaskStatus.CANCELLED: "🚫"
+            }.get(info['status'], "")
+            data.append([
+                idx,
+                info['text'],
+                f"{status_emoji} {info['status']}",
+                info['submit_time'].strftime("%H:%M:%S")
+            ])
+
+    # 返回更新：队列状态、队列表格、最新音频
+    queue_update = gr.update(value=status_text)
+    table_update = gr.update(value=data)
+    latest_output_update = gr.update(value=latest_output, visible=bool(latest_output)) if latest_output else gr.update()
+
+    return queue_update, table_update, latest_output_update
 def clear_completed_tasks():
     """清除已完成的任务"""
     with queue_lock:
@@ -914,12 +969,19 @@ with gr.Blocks(title="IndexTTS Demo", theme=gr.themes.Soft(), css=custom_css) as
     setupAudioSync();
     """
 
-    # 注入 JavaScript
+    timer = gr.Timer(value=5, active=False)
+
     demo.load(
-        lambda: None,
+        lambda: gr.update(active=True),
         inputs=[],
-        outputs=[],
-        js=js_code
+        outputs=[timer],
+        js=js_code  # 保持你原有的 JS 注入
+    )
+
+    timer.tick(
+        fn=auto_refresh_queue_and_latest,
+        inputs=[],
+        outputs=[queue_status_display, queue_table, output_audio]
     )
 
 if __name__ == "__main__":
