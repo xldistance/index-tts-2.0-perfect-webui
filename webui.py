@@ -159,13 +159,14 @@ with open("examples/cases.jsonl", "r", encoding="utf-8") as f:
             example.get("emo_vec_8", 0)
         ])
 
-def add_to_history(audio_path):
+def add_to_history(audio_path, text=""):
     """添加新生成的音频到历史记录"""
+    display_text = text[:50] if text else "未命名音频"
     with generation_lock:
         generation_history.append({
             'path': audio_path,
             'time': datetime.now(),
-            'text': ''  # 可以存储生成的文本
+            'text': display_text  # 👈 存储前20个字符用于显示
         })
 
 def continuous_queue_refresh():
@@ -175,16 +176,22 @@ def continuous_queue_refresh():
         yield get_queue_status()
 
 def get_history_display():
-    """获取历史记录的显示格式，同时返回播放位置状态"""
+    """获取历史记录的显示格式，同时返回播放位置状态和标签"""
     with generation_lock:
         if not generation_history:
-            return [None] * 6, [gr.update(value=0)] * 6  # 返回音频路径 + 播放位置状态
+            # 返回 音频路径 + 播放位置更新 + 标签更新
+            return (
+                [None] * 6,
+                [gr.update(value=0)] * 6,
+                [gr.update(label=f"最近 {i+1}") for i in range(6)]
+            )
         
         history_list = list(generation_history)
         history_list.reverse()
         
         audio_paths = [None] * 6
         position_states = [0] * 6
+        labels = [f"最近 {i+1}" for i in range(6)]  # 默认标签
         
         for i, item in enumerate(history_list[:6]):
             if i < 6:
@@ -192,14 +199,17 @@ def get_history_display():
                 audio_paths[i] = path
                 with playback_lock:
                     position_states[i] = playback_positions.get(path, 0)
+                # 👇 使用存储的文本作为标签
+                labels[i] = item.get('text', f"最近 {i+1}")
+
+        label_updates = [gr.update(label=lbl) for lbl in labels]
         
-        return audio_paths, [gr.update(value=pos) for pos in position_states]
+        return audio_paths, [gr.update(value=pos) for pos in position_states], label_updates
 
 def refresh_history():
-    audio_paths, _ = get_history_display()  # 我们只关心音频路径用于刷新显示
+    audio_paths, _, label_updates = get_history_display()  # 👈 获取 label 更新
     audio_updates = [gr.update(value=h, visible=h is not None) for h in audio_paths]
-    # 返回 6 个更新，对应 6 个历史音频组件
-    return audio_updates
+    return (*audio_updates, *label_updates)  # 👈 返回音频更新 + 标签更新
 
 # ========== 队列处理相关函数 ==========
 def process_queue():
@@ -233,7 +243,7 @@ def process_queue():
                         queue_status[task_id]['end_time'] = datetime.now()
                         
                 if output:
-                    add_to_history(output)
+                    add_to_history(output, task['params']['text'])  # 👈 传入原始文本
                     
             except Exception as ex:
                 print(f"队列生成音频失败，错误信息：{ex}")
@@ -265,8 +275,8 @@ def gen_single_core(params):
     kwargs = params['kwargs']
     
     timestamp = int(time.time() * 1000)
-    cleaned_text = re.sub(r'[\n ]', '', text)
-    output_path = os.path.join("outputs", f"{Path(prompt).stem}_{cleaned_text[:20]}_{timestamp}.wav")
+    cleaned_text = re.sub(r'[\n "\']', '', text)
+    output_path = os.path.join("outputs", f"{Path(prompt).stem}_{cleaned_text[:50]}_{timestamp}.wav")
     
     if type(emo_control_method) is not int:
         emo_control_method = emo_control_method.value
@@ -351,7 +361,7 @@ def add_to_queue(emo_control_method, prompt, text,
     with queue_lock:
         queue_status[task_id] = {
             'status': TaskStatus.PENDING,
-            'text': text[:50] + '...' if len(text) > 50 else text,
+            'text': text[:80] + '...' if len(text) > 80 else text,
             'submit_time': datetime.now(),
             'position': task_queue.qsize() + 1
         }
@@ -411,19 +421,19 @@ def get_queue_status():
                 latest_output = info['output']
                 break
 
-        # ✅ 修复点：正确接收两个返回值
-        audio_paths, position_updates = get_history_display()
+        # ✅ 获取音频路径、播放位置更新、和标签更新
+        audio_paths, position_updates, label_updates = get_history_display()
         history_updates = [gr.update(value=ap, visible=bool(ap)) for ap in audio_paths]
 
         queue_update = gr.update(value=status_text)
         table_update = gr.update(value=data)
         latest_output_update = gr.update(value=latest_output, visible=bool(latest_output)) if latest_output else gr.update()
 
-        return (queue_update, table_update, latest_output_update, *history_updates)
+        return (queue_update, table_update, latest_output_update, *history_updates,*label_updates)
 def auto_refresh_queue_and_latest():
     """仅刷新队列状态和最新生成音频，不刷新历史记录"""
     # ✅ 修复点：正确接收两个返回值，但只使用音频路径部分
-    audio_paths, _ = get_history_display()  # 我们只关心 latest_output
+    audio_paths, _, label_updates = get_history_display()  # 我们只关心 latest_output
 
     latest_output = None
     with queue_lock:
@@ -695,22 +705,22 @@ with gr.Blocks(title="IndexTTS Demo", theme=gr.themes.Soft(), css=custom_css) as
                         gr.Markdown("### 📚 历史记录")
                         refresh_history_btn = gr.Button("刷新", size="sm")
                     with gr.Row():
-                        history_audio_1 = gr.Audio(label="最近 1", visible=False)
+                        history_audio_1 = gr.Audio(label="最近 1", visible=False, elem_id="history_audio_1")
                         history_pos_1 = gr.State(value=0)  # 👈
                     with gr.Row():
-                        history_audio_2 = gr.Audio(label="最近 2", visible=False)
+                        history_audio_2 = gr.Audio(label="最近 2", visible=False, elem_id="history_audio_2")
                         history_pos_2 = gr.State(value=0)  # 👈
                     with gr.Row():
-                        history_audio_3 = gr.Audio(label="最近 3", visible=False)
+                        history_audio_3 = gr.Audio(label="最近 3", visible=False, elem_id="history_audio_3")
                         history_pos_3 = gr.State(value=0)  # 👈
                     with gr.Row():
-                        history_audio_4 = gr.Audio(label="最近 4", visible=False)
+                        history_audio_4 = gr.Audio(label="最近 4", visible=False, elem_id="history_audio_4")
                         history_pos_4 = gr.State(value=0)  # 👈
                     with gr.Row():
-                        history_audio_5 = gr.Audio(label="最近 5", visible=False)
+                        history_audio_5 = gr.Audio(label="最近 5", visible=False, elem_id="history_audio_5")
                         history_pos_5 = gr.State(value=0)  # 👈
                     with gr.Row():
-                        history_audio_6 = gr.Audio(label="最近 6", visible=False)
+                        history_audio_6 = gr.Audio(label="最近 6", visible=False, elem_id="history_audio_6")
                         history_pos_6 = gr.State(value=0)  # 👈
         
         # ⚙️ 高级设置选项卡
@@ -884,9 +894,11 @@ with gr.Blocks(title="IndexTTS Demo", theme=gr.themes.Soft(), css=custom_css) as
                 emo_text, emo_random,
                 max_text_tokens_per_segment,
                 *advanced_params],
-        outputs=[queue_status_display, queue_table, output_audio, 
-                 history_audio_1, history_audio_2, history_audio_3,
-                 history_audio_4, history_audio_5, history_audio_6]
+                outputs=[queue_status_display, queue_table, output_audio, 
+                        history_audio_1, history_audio_2, history_audio_3,
+                        history_audio_4, history_audio_5, history_audio_6,
+                        history_audio_1, history_audio_2, history_audio_3,  # label 更新
+                        history_audio_4, history_audio_5, history_audio_6]   # 共15个
     )
     
     refresh_queue_btn.click(
@@ -909,6 +921,8 @@ with gr.Blocks(title="IndexTTS Demo", theme=gr.themes.Soft(), css=custom_css) as
         refresh_history,
         inputs=[],
         outputs=[history_audio_1, history_audio_2, history_audio_3,
+                 history_audio_4, history_audio_5, history_audio_6,
+                 history_audio_1, history_audio_2, history_audio_3,  # 👈 重复传入，Gradio 会更新 label
                  history_audio_4, history_audio_5, history_audio_6]
     )
     
