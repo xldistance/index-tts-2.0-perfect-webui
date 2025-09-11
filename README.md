@@ -1,3 +1,4 @@
+<img width="3786" height="1748" alt="QQ20250911-151718" src="https://github.com/user-attachments/assets/bfc8a686-cb14-4ee9-bb7d-27c87e965ac1" />
 核心新增功能包括：
 
 1. **从音色参考音频文件目录导入音频：**
