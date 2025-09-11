@@ -76,7 +76,9 @@ EMO_CHOICES = [i18n("与音色参考音频相同"),
 os.makedirs("outputs/tasks", exist_ok=True)
 os.makedirs("prompts", exist_ok=True)
 os.makedirs("outputs", exist_ok=True)
-
+# ========== 播放位置记录 ==========
+playback_positions = {}  # { audio_path: last_played_time }
+playback_lock = threading.Lock()
 # 新增：从 saved_timbres 目录加载音色文件
 SAVED_TIMBRES_DIR = os.path.join(current_dir, "saved_timbres")
 os.makedirs(SAVED_TIMBRES_DIR, exist_ok=True)
@@ -173,25 +175,31 @@ def continuous_queue_refresh():
         yield get_queue_status()
 
 def get_history_display():
-    """获取历史记录的显示格式"""
+    """获取历史记录的显示格式，同时返回播放位置状态"""
     with generation_lock:
         if not generation_history:
-            return [None] * 6
+            return [None] * 6, [gr.update(value=0)] * 6  # 返回音频路径 + 播放位置状态
         
         history_list = list(generation_history)
         history_list.reverse()
         
-        result = [None] * 6
+        audio_paths = [None] * 6
+        position_states = [0] * 6
+        
         for i, item in enumerate(history_list[:6]):
             if i < 6:
-                result[i] = item['path']
+                path = item['path']
+                audio_paths[i] = path
+                with playback_lock:
+                    position_states[i] = playback_positions.get(path, 0)
         
-        return result
+        return audio_paths, [gr.update(value=pos) for pos in position_states]
 
 def refresh_history():
-    """刷新历史记录显示"""
-    history = get_history_display()
-    return [gr.update(value=h, visible=h is not None) for h in history]
+    audio_paths, _ = get_history_display()  # 我们只关心音频路径用于刷新显示
+    audio_updates = [gr.update(value=h, visible=h is not None) for h in audio_paths]
+    # 返回 6 个更新，对应 6 个历史音频组件
+    return audio_updates
 
 # ========== 队列处理相关函数 ==========
 def process_queue():
@@ -403,15 +411,13 @@ def get_queue_status():
                 latest_output = info['output']
                 break
 
-        hist1, hist2, hist3, hist4, hist5, hist6 = get_history_display()
+        # ✅ 修复点：正确接收两个返回值
+        audio_paths, position_updates = get_history_display()
+        history_updates = [gr.update(value=ap, visible=bool(ap)) for ap in audio_paths]
 
         queue_update = gr.update(value=status_text)
         table_update = gr.update(value=data)
         latest_output_update = gr.update(value=latest_output, visible=bool(latest_output)) if latest_output else gr.update()
-        
-        history_updates = []
-        for hist in [hist1, hist2, hist3, hist4, hist5, hist6]:
-            history_updates.append(gr.update(value=hist, visible=bool(hist)))
 
         return (queue_update, table_update, latest_output_update, *history_updates)
 
@@ -627,6 +633,7 @@ with gr.Blocks(title="IndexTTS Demo", theme=gr.themes.Soft(), css=custom_css) as
                 with gr.Column():
                     gr.Markdown("### 🎧 最新生成")
                     output_audio = gr.Audio(label="当前结果", visible=True)
+                    output_position = gr.State(value=0)  # 👈 新增：播放位置状态
                 
                 with gr.Column():
                     with gr.Row():
@@ -634,13 +641,22 @@ with gr.Blocks(title="IndexTTS Demo", theme=gr.themes.Soft(), css=custom_css) as
                         refresh_history_btn = gr.Button("刷新", size="sm")
                     with gr.Row():
                         history_audio_1 = gr.Audio(label="最近 1", visible=False)
+                        history_pos_1 = gr.State(value=0)  # 👈
+                    with gr.Row():
                         history_audio_2 = gr.Audio(label="最近 2", visible=False)
+                        history_pos_2 = gr.State(value=0)  # 👈
                     with gr.Row():
                         history_audio_3 = gr.Audio(label="最近 3", visible=False)
+                        history_pos_3 = gr.State(value=0)  # 👈
+                    with gr.Row():
                         history_audio_4 = gr.Audio(label="最近 4", visible=False)
+                        history_pos_4 = gr.State(value=0)  # 👈
                     with gr.Row():
                         history_audio_5 = gr.Audio(label="最近 5", visible=False)
+                        history_pos_5 = gr.State(value=0)  # 👈
+                    with gr.Row():
                         history_audio_6 = gr.Audio(label="最近 6", visible=False)
+                        history_pos_6 = gr.State(value=0)  # 👈
         
         # ⚙️ 高级设置选项卡
         with gr.Tab("⚙️ 高级设置", elem_id="settings_tab"):
@@ -841,16 +857,91 @@ with gr.Blocks(title="IndexTTS Demo", theme=gr.themes.Soft(), css=custom_css) as
                  history_audio_4, history_audio_5, history_audio_6]
     )
     
-    # 自动刷新队列状态
+    # ========== JavaScript: 同步播放位置 ==========
+    js_code = """
+    function setupAudioSync() {
+        // 为所有 gradio audio 组件绑定事件
+        document.addEventListener('DOMContentLoaded', function() {
+            function syncPlayback(audioElement, positionStateId) {
+                if (!audioElement || !positionStateId) return;
+
+                // 恢复播放位置
+                const savedTime = parseFloat(document.querySelector(`#${positionStateId} input`).value) || 0;
+                if (savedTime > 0 && !isNaN(savedTime)) {
+                    audioElement.currentTime = savedTime;
+                }
+
+                // 监听播放进度
+                audioElement.addEventListener('timeupdate', function() {
+                    const currentTime = audioElement.currentTime;
+                    const inputElem = document.querySelector(`#${positionStateId} input`);
+                    if (inputElem) {
+                        inputElem.value = currentTime;
+                        inputElem.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                });
+
+                // 监听播放结束，重置为0（可选）
+                audioElement.addEventListener('ended', function() {
+                    const inputElem = document.querySelector(`#${positionStateId} input`);
+                    if (inputElem) {
+                        inputElem.value = 0;
+                        inputElem.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                });
+            }
+
+            // 为每个 audio 绑定
+            const audios = [
+                { elem: '#output_audio audio', state: '#output_position' },
+                { elem: '#history_audio_1 audio', state: '#history_pos_1' },
+                { elem: '#history_audio_2 audio', state: '#history_pos_2' },
+                { elem: '#history_audio_3 audio', state: '#history_pos_3' },
+                { elem: '#history_audio_4 audio', state: '#history_pos_4' },
+                { elem: '#history_audio_5 audio', state: '#history_pos_5' },
+                { elem: '#history_audio_6 audio', state: '#history_pos_6' }
+            ];
+
+            audios.forEach(({elem, state}) => {
+                const audio = document.querySelector(elem);
+                if (audio) {
+                    syncPlayback(audio, state.replace('#', ''));
+                }
+            });
+        });
+    }
+
+    setupAudioSync();
+    """
+
+    # 注入 JavaScript
     demo.load(
-        continuous_queue_refresh,
+        lambda: None,
+        inputs=[],
+        outputs=[],
+        js=js_code
+    )
+    # ========== 自动刷新队列和历史记录 ==========
+    # 创建定时器组件并直接添加到 Blocks 中（这是关键！）
+    queue_timer = gr.Timer(value=5, active=True)
+    history_timer = gr.Timer(value=5, active=True)
+
+    # 绑定队列自动刷新
+    queue_timer.tick(
+        fn=get_queue_status,
         inputs=[],
         outputs=[queue_status_display, queue_table, output_audio,
                  history_audio_1, history_audio_2, history_audio_3,
-                 history_audio_4, history_audio_5, history_audio_6],
-        show_progress="hidden"
+                 history_audio_4, history_audio_5, history_audio_6]
     )
 
+    # 绑定历史记录自动刷新
+    history_timer.tick(
+        fn=refresh_history,
+        inputs=[],
+        outputs=[history_audio_1, history_audio_2, history_audio_3,
+                 history_audio_4, history_audio_5, history_audio_6]
+    )
 if __name__ == "__main__":
     # 启用队列功能
     demo.queue(
