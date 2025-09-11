@@ -84,16 +84,16 @@ os.makedirs(SAVED_TIMBRES_DIR, exist_ok=True)
 SUPPORTED_AUDIO_EXTS = (".wav", ".mp3", ".flac", ".m4a", ".ogg")
 
 # 生成历史记录管理
-generation_history = deque(maxlen=3)  # 保存最近3个生成结果
+generation_history = deque(maxlen=10)  # 增加历史记录数量
 generation_lock = threading.Lock()
 
 # ========== 队列系统相关变量 ==========
-task_queue = queue.Queue()  # 任务队列
-queue_status = {}  # 存储每个任务的状态
-queue_lock = threading.Lock()  # 队列状态锁
-processing_thread = None  # 处理线程
-stop_processing = False  # 停止处理标志
-current_task_id = None  # 当前正在处理的任务ID
+task_queue = queue.Queue()
+queue_status = {}
+queue_lock = threading.Lock()
+processing_thread = None
+stop_processing = False
+current_task_id = None
 
 # 任务状态枚举
 class TaskStatus:
@@ -118,19 +118,17 @@ def get_default_timbre():
     timbres = list_timbres()
     sweet_voice_path = os.path.join(SAVED_TIMBRES_DIR, "甜美女声1.mp3")
     
-    # 如果存在"甜美女声1.mp3"，返回它
     if sweet_voice_path in timbres:
         return sweet_voice_path
-    # 否则返回第一个可用的音色
     return timbres[0] if timbres else None
 
-# 预计算下拉默认项（供 Examples 使用）
+# 预计算下拉默认项
 timbre_choices_boot = list_timbres()
 default_timbre_boot = get_default_timbre()
 
 MAX_LENGTH_TO_USE_SPEED = 70
 
-# 读取示例，用 saved_timbres 的默认音色文件做第一列输入
+# 读取示例
 with open("examples/cases.jsonl", "r", encoding="utf-8") as f:
     example_cases = []
     for line in f:
@@ -143,7 +141,7 @@ with open("examples/cases.jsonl", "r", encoding="utf-8") as f:
         else:
             emo_audio_path = None
         example_cases.append([
-            default_timbre_boot,  # 用 saved_timbres 的默认文件作为示例的音色参考
+            default_timbre_boot,
             EMO_CHOICES[example.get("emo_mode", 0)],
             example.get("text"),
             emo_audio_path,
@@ -164,38 +162,36 @@ def add_to_history(audio_path):
     with generation_lock:
         generation_history.append({
             'path': audio_path,
-            'time': datetime.now()
+            'time': datetime.now(),
+            'text': ''  # 可以存储生成的文本
         })
+
 def continuous_queue_refresh():
     """持续刷新队列状态的生成器函数"""
     while True:
-        time.sleep(2)  # 每2秒刷新一次
+        time.sleep(2)
         yield get_queue_status()
+
 def get_history_display():
     """获取历史记录的显示格式"""
     with generation_lock:
         if not generation_history:
-            return None, None, None
+            return [None] * 6
         
-        # 倒序排列（最新的在前）
         history_list = list(generation_history)
         history_list.reverse()
         
-        result = [None, None, None]
-        for i, item in enumerate(history_list[:3]):
-            if i < 3:
+        result = [None] * 6
+        for i, item in enumerate(history_list[:6]):
+            if i < 6:
                 result[i] = item['path']
         
-        return tuple(result)
+        return result
 
 def refresh_history():
-    """刷新历史记录显示（独立函数）"""
-    hist1, hist2, hist3 = get_history_display()
-    return (
-        gr.update(value=hist1, visible=hist1 is not None),
-        gr.update(value=hist2, visible=hist2 is not None),
-        gr.update(value=hist3, visible=hist3 is not None)
-    )
+    """刷新历史记录显示"""
+    history = get_history_display()
+    return [gr.update(value=h, visible=h is not None) for h in history]
 
 # ========== 队列处理相关函数 ==========
 def process_queue():
@@ -204,41 +200,35 @@ def process_queue():
     
     while not stop_processing:
         try:
-            # 获取任务（超时1秒）
             task = task_queue.get(timeout=1)
             
-            if task is None:  # 停止信号
+            if task is None:
                 break
                 
             task_id = task['id']
             current_task_id = task_id
             
-            # 更新任务状态为处理中
             with queue_lock:
                 if task_id in queue_status:
                     if queue_status[task_id]['status'] == TaskStatus.CANCELLED:
-                        continue  # 跳过已取消的任务
+                        continue
                     queue_status[task_id]['status'] = TaskStatus.PROCESSING
                     queue_status[task_id]['start_time'] = datetime.now()
             
-            # 执行生成任务
             try:
                 output = gen_single_core(task['params'])
                 
-                # 更新任务状态为完成
                 with queue_lock:
                     if task_id in queue_status:
                         queue_status[task_id]['status'] = TaskStatus.COMPLETED
                         queue_status[task_id]['output'] = output
                         queue_status[task_id]['end_time'] = datetime.now()
                         
-                # 添加到历史记录
                 if output:
                     add_to_history(output)
                     
             except Exception as ex:
                 print(f"队列生成音频失败，错误信息：{ex}")
-                # 更新任务状态为失败
                 with queue_lock:
                     if task_id in queue_status:
                         queue_status[task_id]['status'] = TaskStatus.FAILED
@@ -254,10 +244,10 @@ def process_queue():
             current_task_id = None
 
 def gen_single_core(params):
-    """核心生成函数（从原gen_single提取）"""
+    """核心生成函数"""
     emo_control_method = params['emo_control_method']
     prompt = params['prompt']
-    text:str = params['text']
+    text = params['text']
     emo_ref_path = params['emo_ref_path']
     emo_weight = params['emo_weight']
     vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8 = params['vec']
@@ -265,7 +255,7 @@ def gen_single_core(params):
     emo_random = params['emo_random']
     max_text_tokens_per_segment = params['max_text_tokens_per_segment']
     kwargs = params['kwargs']
-    # 生成输出路径
+    
     timestamp = int(time.time() * 1000)
     cleaned_text = re.sub(r'[\n ]', '', text)
     output_path = os.path.join("outputs", f"{Path(prompt).stem}_{cleaned_text[:20]}_{timestamp}.wav")
@@ -310,7 +300,6 @@ def add_to_queue(emo_control_method, prompt, text,
     """添加任务到队列"""
     global processing_thread, stop_processing
     
-    # 准备参数
     do_sample, top_p, top_k, temperature, \
         length_penalty, num_beams, repetition_penalty, max_mel_tokens = args
     kwargs = {
@@ -324,7 +313,6 @@ def add_to_queue(emo_control_method, prompt, text,
         "max_mel_tokens": int(max_mel_tokens),
     }
     
-    # 创建任务
     task_id = str(uuid.uuid4())
     task = {
         'id': task_id,
@@ -342,7 +330,6 @@ def add_to_queue(emo_control_method, prompt, text,
         }
     }
     
-    # 添加到队列状态
     with queue_lock:
         queue_status[task_id] = {
             'status': TaskStatus.PENDING,
@@ -351,29 +338,26 @@ def add_to_queue(emo_control_method, prompt, text,
             'position': task_queue.qsize() + 1
         }
     
-    # 添加到队列
     task_queue.put(task)
     
-    # 启动处理线程（如果还没启动）
     if processing_thread is None or not processing_thread.is_alive():
         stop_processing = False
         processing_thread = threading.Thread(target=process_queue, daemon=True)
         processing_thread.start()
     
     return get_queue_status()
+
 def get_queue_status():
-    """获取队列状态信息，并同时返回最近3条生成历史的更新值"""
+    """获取队列状态信息"""
     with queue_lock:
-        # 统计各状态任务数
         pending_count = sum(1 for s in queue_status.values() if s['status'] == TaskStatus.PENDING)
         processing_count = sum(1 for s in queue_status.values() if s['status'] == TaskStatus.PROCESSING)
         completed_count = sum(1 for s in queue_status.values() if s['status'] == TaskStatus.COMPLETED)
 
-        # 获取队列信息表格
         data = []
         sorted_tasks = sorted(queue_status.items(), key=lambda x: x[1]['submit_time'])
 
-        for idx, (task_id, info) in enumerate(sorted_tasks[-10:], 1):  # 只显示最近10个
+        for idx, (task_id, info) in enumerate(sorted_tasks[-10:], 1):
             status_emoji = {
                 TaskStatus.PENDING: "⏳",
                 TaskStatus.PROCESSING: "🔄",
@@ -389,44 +373,35 @@ def get_queue_status():
                 info['submit_time'].strftime("%H:%M:%S")
             ])
 
-        # 创建状态信息
         status_text = f"""
-            ### 队列状态
-            - 🔄 **正在处理**: {processing_count} 个任务
-            - ⏳ **等待中**: {pending_count} 个任务  
-            - ✅ **已完成**: {completed_count} 个任务
-            - 📊 **队列总长度**: {task_queue.qsize()} 个任务
+        <div style='padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
+            <h4 style='margin: 0 0 10px 0;'>📊 队列状态</h4>
+            <div style='display: flex; justify-content: space-around;'>
+                <div>🔄 处理中: <b>{processing_count}</b></div>
+                <div>⏳ 等待中: <b>{pending_count}</b></div>
+                <div>✅ 已完成: <b>{completed_count}</b></div>
+                <div>📁 队列长度: <b>{task_queue.qsize()}</b></div>
+            </div>
+        </div>
+        """
 
-            **提示**: 任务将按提交时间顺序依次处理
-            """
-
-        # 获取最新完成的任务输出（用于 output_audio）
         latest_output = None
         for task_id, info in reversed(sorted_tasks):
             if info['status'] == TaskStatus.COMPLETED and 'output' in info:
                 latest_output = info['output']
                 break
 
-        # 获取最近三条历史（最新在前）
-        hist1, hist2, hist3 = get_history_display()
+        hist1, hist2, hist3, hist4, hist5, hist6 = get_history_display()
 
-        # 返回 6 个 gr.update（依次与绑定 outputs 顺序对应）
         queue_update = gr.update(value=status_text)
         table_update = gr.update(value=data)
         latest_output_update = gr.update(value=latest_output, visible=bool(latest_output)) if latest_output else gr.update()
-        hist1_update = gr.update(value=hist1, visible=bool(hist1))
-        hist2_update = gr.update(value=hist2, visible=bool(hist2))
-        hist3_update = gr.update(value=hist3, visible=bool(hist3))
+        
+        history_updates = []
+        for hist in [hist1, hist2, hist3, hist4, hist5, hist6]:
+            history_updates.append(gr.update(value=hist, visible=bool(hist)))
 
-        return (queue_update, table_update, latest_output_update, hist1_update, hist2_update, hist3_update)
-
-def cancel_task(task_id):
-    """取消指定任务"""
-    with queue_lock:
-        if task_id in queue_status and queue_status[task_id]['status'] == TaskStatus.PENDING:
-            queue_status[task_id]['status'] = TaskStatus.CANCELLED
-            return f"任务 {task_id[:8]}... 已取消"
-    return "无法取消该任务"
+        return (queue_update, table_update, latest_output_update, *history_updates)
 
 def clear_completed_tasks():
     """清除已完成的任务"""
@@ -440,47 +415,37 @@ def clear_completed_tasks():
 def on_input_text_change(text, max_text_tokens_per_segment):
     if text and len(text) > 0:
         text_tokens_list = tts.tokenizer.tokenize(text)
-
         segments = tts.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment=int(max_text_tokens_per_segment))
         data = []
         for i, s in enumerate(segments):
             segment_str = ''.join(s)
             tokens_count = len(s)
             data.append([i, segment_str, tokens_count])
-        return {
-            segments_preview: gr.update(value=data, visible=True, type="array"),
-        }
+        return gr.update(value=data, visible=True)
     else:
-        df = pd.DataFrame([], columns=[i18n("序号"), i18n("分句内容"), i18n("Token数")])
-        return {
-            segments_preview: gr.update(value=df),
-        }
+        return gr.update(value=[])
 
 def on_method_select(emo_control_method):
     if emo_control_method == 1:
         return (gr.update(visible=True),
                 gr.update(visible=False),
                 gr.update(visible=False),
-                gr.update(visible=False)
-                )
+                gr.update(visible=False))
     elif emo_control_method == 2:
         return (gr.update(visible=False),
                 gr.update(visible=True),
                 gr.update(visible=True),
-                gr.update(visible=False)
-                )
+                gr.update(visible=False))
     elif emo_control_method == 3:
         return (gr.update(visible=False),
                 gr.update(visible=True),
                 gr.update(visible=False),
-                gr.update(visible=True)
-                )
+                gr.update(visible=True))
     else:
         return (gr.update(visible=False),
                 gr.update(visible=False),
                 gr.update(visible=False),
-                gr.update(visible=False)
-                )
+                gr.update(visible=False))
 
 def update_timbre_preview(selected_path):
     """根据下拉选中的路径，更新试听播放器"""
@@ -489,261 +454,402 @@ def update_timbre_preview(selected_path):
     return gr.update(value=None, visible=False)
 
 def refresh_timbres():
-    """刷新 saved_timbres 列表，并同时更新下拉与试听"""
+    """刷新 saved_timbres 列表"""
     choices = list_timbres()
-    value = get_default_timbre()  # 使用新的默认音色获取函数
+    value = get_default_timbre()
     dropdown_update = gr.update(choices=choices, value=value)
     preview_update = gr.update(value=value, visible=bool(value))
     return dropdown_update, preview_update
 
-def auto_refresh_queue():
-    """自动刷新队列状态"""
-    return get_queue_status()
+# 自定义CSS样式
+custom_css = """
+    /* 渐变背景 */
+    .gradio-container {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background-attachment: fixed;
+    }
+    
+    /* 主容器样式 */
+    .container {
+        max-width: 1400px !important;
+    }
+    
+    /* 标签页样式 */
+    .tabs {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 15px;
+        padding: 20px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    }
+    
+    /* 按钮样式 */
+    .primary-btn {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        color: white !important;
+        font-weight: bold !important;
+        transition: transform 0.2s !important;
+    }
+    
+    .primary-btn:hover {
+        transform: scale(1.05) !important;
+    }
+    
+    /* 卡片样式 */
+    .card {
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* 表格样式 */
+    .dataframe {
+        border-radius: 10px !important;
+        overflow: hidden !important;
+    }
+    
+    /* 音频组件样式 */
+    audio {
+        width: 100% !important;
+        border-radius: 10px !important;
+    }
+    
+    /* 滑块样式 */
+    input[type="range"] {
+        background: linear-gradient(to right, #667eea 0%, #764ba2 100%) !important;
+    }
+    
+    /* 标题样式 */
+    h1, h2, h3 {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+"""
 
-with gr.Blocks(title="IndexTTS Demo") as demo:
+# 创建Gradio界面
+with gr.Blocks(title="IndexTTS Demo", theme=gr.themes.Soft(), css=custom_css) as demo:
     mutex = threading.Lock()
-    gr.HTML('''
-    <h2><center>IndexTTS2: A Breakthrough in Emotionally Expressive and Duration-Controlled Auto-Regressive Zero-Shot Text-to-Speech</h2>
-<p align="center">
-<a href='https://arxiv.org/abs/2506.21619'><img src='https://img.shields.io/badge/ArXiv-2506.21619-red'></a>
-</p>
-    ''')
-    with gr.Tab(i18n("音频生成")):
-        # 队列状态显示区域
-        with gr.Row():
-            with gr.Column(scale=2):
-                queue_status_display = gr.Markdown(value="### 队列状态\n- 等待初始化...")
-            with gr.Column(scale=1):
-                refresh_queue_btn = gr.Button("🔄 刷新队列状态", variant="secondary")
-                clear_queue_btn = gr.Button("🗑️ 清除已完成任务", variant="secondary")
-        
-        # 队列任务列表
-        with gr.Row():
-            queue_table = gr.Dataframe(
-                headers=[i18n("序号"), i18n("文本预览"), i18n("状态"), i18n("提交时间")],
-                label=i18n("任务队列（最近10个）"),
-                interactive=False
-            )
-        
-        with gr.Row():
-            # 音色参考音频改为从 saved_timbres 选择
-            timbre_choices = list_timbres()
-            default_timbre = get_default_timbre()  # 使用新的默认音色获取函数
-
-            with gr.Column():
-                prompt_audio = gr.Dropdown(
-                    label=i18n("音色参考音频（从 saved_timbres 选择）"),
-                    key="prompt_audio",
-                    choices=timbre_choices,
-                    value=default_timbre,
-                    interactive=True,
-                )
-                refresh_timbres_btn = gr.Button(i18n("刷新音色列表"), variant="secondary")
-
-                # 音色试听播放器
-                timbre_preview = gr.Audio(
-                    label=i18n("音色试听"),
-                    value=default_timbre,
-                    visible=bool(default_timbre),
-                    autoplay=False
-                )
-
-            with gr.Column():
-                input_text_single = gr.TextArea(label=i18n("文本"), key="input_text_single",
-                                                placeholder=i18n("请输入目标文本"),
-                                                info=f"{i18n('当前模型版本')}{tts.model_version or '1.0'}")
-                with gr.Row():
-                    gen_button = gr.Button(i18n("➕ 添加到队列"), key="gen_button", interactive=True, variant="primary")
-                    queue_info = gr.Textbox(label="", value="点击按钮将任务添加到生成队列", interactive=False)
-
-        # 当前生成结果和历史记录区域
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### " + i18n("当前生成结果"))
-                output_audio = gr.Audio(label=i18n("最新生成"), visible=True, key="output_audio")
-            
-            with gr.Column():
-                with gr.Row():
-                    gr.Markdown("### " + i18n("生成历史（最近3个）"))
-                    refresh_history_btn = gr.Button(i18n("刷新历史"), size="sm", variant="secondary")
-                history_audio_1 = gr.Audio(label=i18n("历史 1（最新）"), visible=False)
-                history_audio_2 = gr.Audio(label=i18n("历史 2"), visible=False)
-                history_audio_3 = gr.Audio(label=i18n("历史 3（最旧）"), visible=False)
-
-        with gr.Accordion(i18n("功能设置")):
-            # 情感控制选项部分
+    
+    # 顶部导航栏
+    with gr.Row():
+        gr.HTML('''
+        <div style="text-align: center; padding: 20px; background: white; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+            <h1 style="margin: 0; font-size: 2.5em;">🎙️ IndexTTS 2.0</h1>
+            <p style="color: #666; margin: 10px 0;">Emotionally Expressive Zero-Shot Text-to-Speech System</p>
+            <div style="display: flex; justify-content: center; gap: 20px; margin-top: 15px;">
+                <a href='https://arxiv.org/abs/2506.21619' target='_blank' style='text-decoration: none;'>
+                    <img src='https://img.shields.io/badge/ArXiv-2506.21619-red' style='height: 25px;'>
+                </a>
+                <a href='#' style='text-decoration: none;'>
+                    <img src='https://img.shields.io/badge/Version-2.0-blue' style='height: 25px;'>
+                </a>
+                <a href='#' style='text-decoration: none;'>
+                    <img src='https://img.shields.io/badge/License-MIT-green' style='height: 25px;'>
+                </a>
+            </div>
+        </div>
+        ''')
+    
+    # 主选项卡
+    with gr.Tabs(elem_classes="tabs"):
+        # 🎵 音频生成选项卡
+        with gr.Tab("🎵 音频生成", elem_id="generation_tab"):
+            # 实时状态监控面板
             with gr.Row():
+                with gr.Column(scale=3):
+                    queue_status_display = gr.HTML(value="<div style='padding: 10px;'>初始化中...</div>")
+                with gr.Column(scale=1):
+                    with gr.Row():
+                        refresh_queue_btn = gr.Button("🔄 刷新", size="sm", elem_classes="primary-btn")
+                        clear_queue_btn = gr.Button("🗑️ 清理", size="sm")
+            
+            # 任务队列表格
+            queue_table = gr.Dataframe(
+                headers=["序号", "文本预览", "状态", "提交时间"],
+                label="📋 任务队列",
+                interactive=False,
+                elem_classes="card"
+            )
+            
+            # 主要输入区域
+            with gr.Row():
+                with gr.Column(scale=1):
+                    # 音色选择卡片
+                    with gr.Group(elem_classes="card"):
+                        gr.Markdown("### 🎨 音色选择")
+                        prompt_audio = gr.Dropdown(
+                            label="选择音色",
+                            choices=timbre_choices_boot,
+                            value=default_timbre_boot,
+                            interactive=True,
+                        )
+                        refresh_timbres_btn = gr.Button("刷新列表", size="sm")
+                        timbre_preview = gr.Audio(
+                            label="试听",
+                            value=default_timbre_boot,
+                            visible=bool(default_timbre_boot),
+                            autoplay=False
+                        )
+                
+                with gr.Column(scale=2):
+                    # 文本输入卡片
+                    with gr.Group(elem_classes="card"):
+                        gr.Markdown("### ✍️ 输入文本")
+                        input_text_single = gr.TextArea(
+                            placeholder="请输入要转换的文本内容...",
+                            lines=5,
+                            info=f"模型版本: {tts.model_version or '1.0'}"
+                        )
+                        gen_button = gr.Button(
+                            "🚀 添加到生成队列", 
+                            variant="primary", 
+                            size="lg",
+                            elem_classes="primary-btn"
+                        )
+            
+            # 生成结果展示区
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### 🎧 最新生成")
+                    output_audio = gr.Audio(label="当前结果", visible=True)
+                
+                with gr.Column():
+                    with gr.Row():
+                        gr.Markdown("### 📚 历史记录")
+                        refresh_history_btn = gr.Button("刷新", size="sm")
+                    with gr.Row():
+                        history_audio_1 = gr.Audio(label="最近 1", visible=False)
+                        history_audio_2 = gr.Audio(label="最近 2", visible=False)
+                    with gr.Row():
+                        history_audio_3 = gr.Audio(label="最近 3", visible=False)
+                        history_audio_4 = gr.Audio(label="最近 4", visible=False)
+                    with gr.Row():
+                        history_audio_5 = gr.Audio(label="最近 5", visible=False)
+                        history_audio_6 = gr.Audio(label="最近 6", visible=False)
+        
+        # ⚙️ 高级设置选项卡
+        with gr.Tab("⚙️ 高级设置", elem_id="settings_tab"):
+            # 情感控制设置
+            with gr.Group(elem_classes="card"):
+                gr.Markdown("### 🎭 情感控制")
                 emo_control_method = gr.Radio(
                     choices=EMO_CHOICES,
                     type="index",
-                    value=EMO_CHOICES[0], label=i18n("情感控制方式"))
-
-        # 情感参考音频部分
-        with gr.Group(visible=False) as emotion_reference_group:
-            with gr.Row():
-                emo_upload = gr.Audio(label=i18n("上传情感参考音频"), type="filepath")
-
-            with gr.Row():
-                emo_weight = gr.Slider(label=i18n("情感权重"), minimum=0.0, maximum=1.6, value=0.8, step=0.01)
-
-        # 情感随机采样
-        with gr.Row():
-            emo_random = gr.Checkbox(label=i18n("情感随机采样"), value=False, visible=False)
-
-        # 情感向量控制部分
-        with gr.Group(visible=False) as emotion_vector_group:
-            with gr.Row():
-                with gr.Column():
-                    vec1 = gr.Slider(label=i18n("喜"), minimum=0.0, maximum=1.4, value=0.0, step=0.05)
-                    vec2 = gr.Slider(label=i18n("怒"), minimum=0.0, maximum=1.4, value=0.0, step=0.05)
-                    vec3 = gr.Slider(label=i18n("哀"), minimum=0.0, maximum=1.4, value=0.0, step=0.05)
-                    vec4 = gr.Slider(label=i18n("惧"), minimum=0.0, maximum=1.4, value=0.0, step=0.05)
-                with gr.Column():
-                    vec5 = gr.Slider(label=i18n("厌恶"), minimum=0.0, maximum=1.4, value=0.0, step=0.05)
-                    vec6 = gr.Slider(label=i18n("低落"), minimum=0.0, maximum=1.4, value=0.0, step=0.05)
-                    vec7 = gr.Slider(label=i18n("惊喜"), minimum=0.0, maximum=1.4, value=0.0, step=0.05)
-                    vec8 = gr.Slider(label=i18n("平静"), minimum=0.0, maximum=1.4, value=0.0, step=0.05)
-
-        with gr.Group(visible=False) as emo_text_group:
-            with gr.Row():
-                emo_text = gr.Textbox(label=i18n("情感描述文本"),
-                                      placeholder=i18n("请输入情绪描述（或留空以自动使用目标文本作为情绪描述）"),
-                                      value="",
-                                      info=i18n("例如：高兴，愤怒，悲伤等"))
-
-        with gr.Accordion(i18n("高级生成参数设置"), open=False):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    gr.Markdown(f"**{i18n('GPT2 采样设置')}** _{i18n('参数会影响音频多样性和生成速度详见')} [Generation strategies](https://huggingface.co/docs/transformers/main/en/generation_strategies)._")
+                    value=EMO_CHOICES[0],
+                    label="控制方式"
+                )
+                
+                # 情感参考音频
+                with gr.Group(visible=False) as emotion_reference_group:
+                    emo_upload = gr.Audio(label="上传情感参考音频", type="filepath")
+                    emo_weight = gr.Slider(label="情感权重", minimum=0.0, maximum=1.6, value=0.8, step=0.01)
+                
+                # 情感随机采样
+                emo_random = gr.Checkbox(label="启用情感随机采样", value=False, visible=False)
+                
+                # 情感向量控制
+                with gr.Group(visible=False) as emotion_vector_group:
+                    gr.Markdown("#### 情感向量调节")
                     with gr.Row():
-                        do_sample = gr.Checkbox(label="do_sample", value=True, info=i18n("是否进行采样"))
-                        temperature = gr.Slider(label="temperature", minimum=0.1, maximum=2.0, value=0.8, step=0.1)
-                    with gr.Row():
-                        top_p = gr.Slider(label="top_p", minimum=0.0, maximum=1.0, value=0.8, step=0.01)
-                        top_k = gr.Slider(label="top_k", minimum=0, maximum=100, value=30, step=1)
-                        num_beams = gr.Slider(label="num_beams", value=3, minimum=1, maximum=10, step=1)
-                    with gr.Row():
-                        repetition_penalty = gr.Number(label="repetition_penalty", precision=None, value=10.0, minimum=0.1, maximum=20.0, step=0.1)
-                        length_penalty = gr.Number(label="length_penalty", precision=None, value=0.0, minimum=-2.0, maximum=2.0, step=0.1)
-                    max_mel_tokens = gr.Slider(label="max_mel_tokens", value=1500, minimum=50, maximum=tts.cfg.gpt.max_mel_tokens, step=10, info=i18n("生成Token最大数量，过小导致音频被截断"), key="max_mel_tokens")
-                with gr.Column(scale=2):
-                    gr.Markdown(f'**{i18n("分句设置")}** _{i18n("参数会影响音频质量和生成速度")}_')
-                    with gr.Row():
-                        initial_value = max(20, min(tts.cfg.gpt.max_text_tokens, cmd_args.gui_seg_tokens))
-                        max_text_tokens_per_segment = gr.Slider(
-                            label=i18n("分句最大Token数"), value=initial_value, minimum=20, maximum=tts.cfg.gpt.max_text_tokens, step=2, key="max_text_tokens_per_segment",
-                            info=i18n("建议80~200之间，值越大，分句越长；值越小，分句越碎；过小过大都可能导致音频质量不高"),
-                        )
-                    with gr.Accordion(i18n("预览分句结果"), open=True) as segments_settings:
-                        segments_preview = gr.Dataframe(
-                            headers=[i18n("序号"), i18n("分句内容"), i18n("Token数")],
-                            key="segments_preview",
-                            wrap=True,
-                        )
-            advanced_params = [
-                do_sample, top_p, top_k, temperature,
-                length_penalty, num_beams, repetition_penalty, max_mel_tokens,
-            ]
-
-        if len(example_cases) > 0:
-            gr.Examples(
-                examples=example_cases,
-                examples_per_page=20,
-                inputs=[prompt_audio,
-                        emo_control_method,
-                        input_text_single,
-                        emo_upload,
-                        emo_weight,
-                        emo_text,
-                        vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8]
-            )
-
-        # 事件绑定
-        emo_control_method.select(on_method_select,
-            inputs=[emo_control_method],
-            outputs=[emotion_reference_group,
-                     emo_random,
-                     emotion_vector_group,
-                     emo_text_group]
-        )
-
-        input_text_single.change(
-            on_input_text_change,
-            inputs=[input_text_single, max_text_tokens_per_segment],
-            outputs=[segments_preview]
-        )
-        max_text_tokens_per_segment.change(
-            on_input_text_change,
-            inputs=[input_text_single, max_text_tokens_per_segment],
-            outputs=[segments_preview]
-        )
-
-        # 下拉变化 => 更新试听
-        prompt_audio.change(
-            update_timbre_preview,
-            inputs=[prompt_audio],
-            outputs=[timbre_preview]
-        )
-
-        # 刷新列表 => 同时更新下拉和试听
-        refresh_timbres_btn.click(
-            refresh_timbres,
-            inputs=[],
-            outputs=[prompt_audio, timbre_preview]
-        )
-
-        # 生成按钮 - 现在添加到队列
-        gen_button.click(
-            add_to_queue,
-            inputs=[emo_control_method, prompt_audio, input_text_single, emo_upload, emo_weight,
-                    vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8,
-                    emo_text, emo_random,
-                    max_text_tokens_per_segment,
-                    *advanced_params,
-                    ],
-            outputs=[queue_status_display, queue_table, output_audio]
-        ).then(
-            lambda: gr.update(value="✅ 任务已添加到队列，请等待处理..."),
-            outputs=[queue_info]
-        )
+                        with gr.Column():
+                            vec1 = gr.Slider(label="😊 喜", minimum=0.0, maximum=1.4, value=0.0, step=0.05)
+                            vec2 = gr.Slider(label="😠 怒", minimum=0.0, maximum=1.4, value=0.0, step=0.05)
+                            vec3 = gr.Slider(label="😢 哀", minimum=0.0, maximum=1.4, value=0.0, step=0.05)
+                            vec4 = gr.Slider(label="😨 惧", minimum=0.0, maximum=1.4, value=0.0, step=0.05)
+                        with gr.Column():
+                            vec5 = gr.Slider(label="🤢 厌恶", minimum=0.0, maximum=1.4, value=0.0, step=0.05)
+                            vec6 = gr.Slider(label="😔 低落", minimum=0.0, maximum=1.4, value=0.0, step=0.05)
+                            vec7 = gr.Slider(label="😲 惊喜", minimum=0.0, maximum=1.4, value=0.0, step=0.05)
+                            vec8 = gr.Slider(label="😌 平静", minimum=0.0, maximum=1.4, value=0.0, step=0.05)
+                
+                # 情感文本描述
+                with gr.Group(visible=False) as emo_text_group:
+                    emo_text = gr.Textbox(
+                        label="情感描述",
+                        placeholder="输入情绪描述（如：高兴、愤怒、悲伤等）",
+                        value=""
+                    )
+            
+            # 生成参数设置
+            with gr.Group(elem_classes="card"):
+                gr.Markdown("### 🔧 生成参数")
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("#### GPT2 采样参数")
+                        do_sample = gr.Checkbox(label="启用采样", value=True)
+                        temperature = gr.Slider(label="Temperature", minimum=0.1, maximum=2.0, value=0.8, step=0.1)
+                        top_p = gr.Slider(label="Top P", minimum=0.0, maximum=1.0, value=0.8, step=0.01)
+                        top_k = gr.Slider(label="Top K", minimum=0, maximum=100, value=30, step=1)
+                    
+                    with gr.Column():
+                        gr.Markdown("#### 生成控制")
+                        num_beams = gr.Slider(label="Beam数量", value=3, minimum=1, maximum=10, step=1)
+                        repetition_penalty = gr.Number(label="重复惩罚", value=10.0, minimum=0.1, maximum=20.0)
+                        length_penalty = gr.Number(label="长度惩罚", value=0.0, minimum=-2.0, maximum=2.0)
+                        max_mel_tokens = gr.Slider(label="最大Token数", value=1500, minimum=50, maximum=3000, step=10)
+            
+            # 分句设置
+            with gr.Group(elem_classes="card"):
+                gr.Markdown("### 📝 分句设置")
+                max_text_tokens_per_segment = gr.Slider(
+                    label="分句最大Token数",
+                    value=200,
+                    minimum=20,
+                    maximum=500,
+                    step=2,
+                    info="建议80-200，影响音频质量和生成速度"
+                )
+                segments_preview = gr.Dataframe(
+                    headers=["序号", "分句内容", "Token数"],
+                    label="分句预览",
+                    wrap=True
+                )
         
-        # 刷新队列状态
-        refresh_queue_btn.click(
-            get_queue_status,
-            inputs=[],
-            outputs=[queue_status_display, queue_table, output_audio]
-        )
+        # 📖 使用示例选项卡
+        with gr.Tab("📖 使用示例", elem_id="examples_tab"):
+            if len(example_cases) > 0:
+                gr.Examples(
+                    examples=example_cases,
+                    examples_per_page=10,
+                    inputs=[prompt_audio,
+                            emo_control_method,
+                            input_text_single,
+                            emo_upload,
+                            emo_weight,
+                            emo_text,
+                            vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8],
+                    label="点击示例快速体验"
+                )
         
-        # 清除已完成任务
-        clear_queue_btn.click(
-            clear_completed_tasks,
-            inputs=[],
-            outputs=[queue_status_display, queue_table, output_audio]
-        )
-        
-        # 刷新历史按钮 - 独立更新历史显示
-        refresh_history_btn.click(
-            refresh_history,
-            inputs=[],
-            outputs=[history_audio_1, history_audio_2, history_audio_3]
-        )
-        # 设置持续运行的队列状态刷新
-        demo.load(
-            continuous_queue_refresh,
-            inputs=[],
-            outputs=[queue_status_display, queue_table, output_audio],
-            show_progress="hidden"  # 隐藏进度条，避免界面闪烁
-        )
+        # ℹ️ 关于选项卡
+        with gr.Tab("ℹ️ 关于", elem_id="about_tab"):
+            gr.Markdown("""
+            ## 关于 IndexTTS 2.0
+            
+            IndexTTS 是一个先进的零样本文本转语音系统，具有以下特点：
+            
+            ### ✨ 主要特性
+            - 🎭 **情感表达**：支持多种情感控制方式
+            - 🎨 **音色克隆**：仅需几秒参考音频即可克隆音色
+            - ⚡ **高效生成**：优化的推理引擎，快速生成高质量音频
+            - 🌏 **多语言支持**：支持中文和英文
+            
+            ### 📚 使用指南
+            1. **选择音色**：从预设音色中选择或上传自定义音频
+            2. **输入文本**：输入要转换的文本内容
+            3. **调整参数**：根据需要调整情感和生成参数
+            4. **生成音频**：点击生成按钮，等待处理完成
+            
+            ### 🔗 相关链接
+            - [论文地址](https://arxiv.org/abs/2506.21619)
+            - [GitHub仓库](#)
+            - [模型下载](#)
+            
+            ### 📧 联系我们
+            如有问题或建议，请通过以下方式联系：
+            - Email: example@email.com
+            - Issue: GitHub Issues
+            
+            ---
+            *© 2024 IndexTTS Team. All rights reserved.*
+            """)
+    
+    # 高级参数列表（用于传递）
+    advanced_params = [
+        do_sample, top_p, top_k, temperature,
+        length_penalty, num_beams, repetition_penalty, max_mel_tokens,
+    ]
+    
+    # 事件绑定
+    emo_control_method.select(
+        on_method_select,
+        inputs=[emo_control_method],
+        outputs=[emotion_reference_group, emo_random, emotion_vector_group, emo_text_group]
+    )
+    
+    input_text_single.change(
+        on_input_text_change,
+        inputs=[input_text_single, max_text_tokens_per_segment],
+        outputs=[segments_preview]
+    )
+    
+    max_text_tokens_per_segment.change(
+        on_input_text_change,
+        inputs=[input_text_single, max_text_tokens_per_segment],
+        outputs=[segments_preview]
+    )
+    
+    prompt_audio.change(
+        update_timbre_preview,
+        inputs=[prompt_audio],
+        outputs=[timbre_preview]
+    )
+    
+    refresh_timbres_btn.click(
+        refresh_timbres,
+        inputs=[],
+        outputs=[prompt_audio, timbre_preview]
+    )
+    
+    gen_button.click(
+        add_to_queue,
+        inputs=[emo_control_method, prompt_audio, input_text_single, emo_upload, emo_weight,
+                vec1, vec2, vec3, vec4, vec5, vec6, vec7, vec8,
+                emo_text, emo_random,
+                max_text_tokens_per_segment,
+                *advanced_params],
+        outputs=[queue_status_display, queue_table, output_audio, 
+                 history_audio_1, history_audio_2, history_audio_3,
+                 history_audio_4, history_audio_5, history_audio_6]
+    )
+    
+    refresh_queue_btn.click(
+        get_queue_status,
+        inputs=[],
+        outputs=[queue_status_display, queue_table, output_audio,
+                 history_audio_1, history_audio_2, history_audio_3,
+                 history_audio_4, history_audio_5, history_audio_6]
+    )
+    
+    clear_queue_btn.click(
+        clear_completed_tasks,
+        inputs=[],
+        outputs=[queue_status_display, queue_table, output_audio,
+                 history_audio_1, history_audio_2, history_audio_3,
+                 history_audio_4, history_audio_5, history_audio_6]
+    )
+    
+    refresh_history_btn.click(
+        refresh_history,
+        inputs=[],
+        outputs=[history_audio_1, history_audio_2, history_audio_3,
+                 history_audio_4, history_audio_5, history_audio_6]
+    )
+    
+    # 自动刷新队列状态
+    demo.load(
+        continuous_queue_refresh,
+        inputs=[],
+        outputs=[queue_status_display, queue_table, output_audio,
+                 history_audio_1, history_audio_2, history_audio_3,
+                 history_audio_4, history_audio_5, history_audio_6],
+        show_progress="hidden"
+    )
 
 if __name__ == "__main__":
-    # 启用队列功能，支持多个用户排队生成
+    # 启用队列功能
     demo.queue(
-        max_size=50,  # 增加队列长度以支持更多任务
-        default_concurrency_limit=1  # 同时处理的请求数（设为1确保顺序处理）
+        max_size=50,
+        default_concurrency_limit=1
     )
     
     demo.launch(
         server_name=cmd_args.host,
         server_port=cmd_args.port,
-        share=False
+        share=False,
+        favicon_path=None,  # 可以添加自定义图标
+        show_error=True
     )
