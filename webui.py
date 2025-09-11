@@ -921,27 +921,7 @@ with gr.Blocks(title="IndexTTS Demo", theme=gr.themes.Soft(), css=custom_css) as
         outputs=[],
         js=js_code
     )
-    # ========== 自动刷新队列和历史记录 ==========
-    # 创建定时器组件并直接添加到 Blocks 中（这是关键！）
-    queue_timer = gr.Timer(value=5, active=True)
-    history_timer = gr.Timer(value=5, active=True)
 
-    # 绑定队列自动刷新
-    queue_timer.tick(
-        fn=get_queue_status,
-        inputs=[],
-        outputs=[queue_status_display, queue_table, output_audio,
-                 history_audio_1, history_audio_2, history_audio_3,
-                 history_audio_4, history_audio_5, history_audio_6]
-    )
-
-    # 绑定历史记录自动刷新
-    history_timer.tick(
-        fn=refresh_history,
-        inputs=[],
-        outputs=[history_audio_1, history_audio_2, history_audio_3,
-                 history_audio_4, history_audio_5, history_audio_6]
-    )
 if __name__ == "__main__":
     # 启用队列功能
     demo.queue(
