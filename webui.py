@@ -1010,5 +1010,6 @@ if __name__ == "__main__":
         server_port=cmd_args.port,
         share=False,
         favicon_path=None,  # 可以添加自定义图标
-        show_error=True
+        show_error=True,
+        inbrowser=True
     )
