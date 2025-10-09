@@ -166,7 +166,7 @@ def add_to_history(audio_path, text=""):
         generation_history.append({
             'path': audio_path,
             'time': datetime.now(),
-            'text': display_text  # 👈 存储前20个字符用于显示
+            'text': display_text  # 👈 存储前50个字符用于显示
         })
 
 def continuous_queue_refresh():
@@ -275,7 +275,7 @@ def gen_single_core(params):
     kwargs = params['kwargs']
     
     timestamp = int(time.time() * 1000)
-    cleaned_text = re.sub(r'[\n "\']', '', text)
+    cleaned_text = re.sub(r'[\n "\' :]', ' ', text)
     output_path = os.path.join("outputs", f"{Path(prompt).stem}_{cleaned_text[:50]}_{timestamp}.wav")
     
     if type(emo_control_method) is not int:
