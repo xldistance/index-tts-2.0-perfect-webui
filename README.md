@@ -1,5 +1,6 @@
 
 <img width="3714" height="3064" alt="FireShot Capture 025 - IndexTTS 2 0 -  127 0 0 1" src="https://github.com/user-attachments/assets/dfb08c1b-fb90-4137-86f3-c496cf78bedb" />
+
 # 推荐安装deepspeed加速
 https://github.com/6Morpheus6/deepspeed-windows-wheels
 
