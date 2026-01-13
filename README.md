@@ -1,5 +1,7 @@
-<img width="3754" height="1786" alt="QQ20260113-172527" src="https://github.com/user-attachments/assets/d757fd63-e1e5-4fe4-8482-a1df44eb61a6" />
 
+<img width="3714" height="3064" alt="FireShot Capture 025 - IndexTTS 2 0 -  127 0 0 1" src="https://github.com/user-attachments/assets/dfb08c1b-fb90-4137-86f3-c496cf78bedb" />
+# 推荐安装deepspeed加速
+> https://github.com/6Morpheus6/deepspeed-windows-wheels
 # 📌 升级建议：Gradio 与 Pandas
 
 为确保项目稳定运行并兼容最新功能，**强烈建议**将以下两个关键库升级至最新版本：
