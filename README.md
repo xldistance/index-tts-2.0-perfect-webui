@@ -1,4 +1,5 @@
-<img width="3720" height="1774" alt="QQ20250911-151718" src="https://github.com/user-attachments/assets/ae4ec1c7-3d26-486f-9c76-2cf8423a117a" />
+<img width="3754" height="1786" alt="QQ20260113-172527" src="https://github.com/user-attachments/assets/d757fd63-e1e5-4fe4-8482-a1df44eb61a6" />
+
 # 📌 升级建议：Gradio 与 Pandas
 
 为确保项目稳定运行并兼容最新功能，**强烈建议**将以下两个关键库升级至最新版本：
